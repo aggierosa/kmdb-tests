@@ -152,6 +152,7 @@ class Test_view(APITestCase):
             "bio": "s",
             "is_critic": False,
             "is_superuser": True,
+            "is_staff": True,
         }
 
         cls.regular_user_data = {
@@ -246,6 +247,13 @@ class Test_view(APITestCase):
             "recomendation": "Must Watch",
         }
 
+        cls.review_wrong_recomendation = {
+            "stars": 10,
+            "review": "not very nice soup",
+            "spoilers": False,
+            "recomendation": "Comment random",
+        }
+
         cls.url_post = "/api/users/register/"
         cls.url_login = "/api/users/login/"
 
@@ -313,7 +321,18 @@ class Test_view(APITestCase):
 
         self.assertEqual(critic_1.auth_token.key, response.data["token"])
 
-    def test_non_owner_patch_403(self):
+    def test_owner_list_user_200(self):
+        critic_1 = User.objects.create_user(**self.critic_1_data)
+
+        critic_1_token = Token.objects.create(user=critic_1)
+
+        self.client.credentials(HTTP_AUTHORIZATION="token " + critic_1_token.key)
+
+        response = self.client.get(f"/api/users/{critic_1.id}/")
+
+        self.assertEqual(response.status_code, 200)
+
+    def test_non_owner_list_user_403(self):
         user_1 = User.objects.create_user(**self.regular_user_data_2)
         critic_1 = User.objects.create_user(**self.critic_1_data)
 
@@ -323,7 +342,71 @@ class Test_view(APITestCase):
 
         response = self.client.get(f"/api/users/{critic_1.id}/")
 
-        self.assertEqual(response.status_code, status.HTTP_403_FORBIDDEN)
+        self.assertEqual(response.status_code, 403)
+
+    def test_list_user_token_null_401(self):
+        critic_1 = User.objects.create_user(**self.critic_1_data)
+
+        response = self.client.get(f"/api/users/{critic_1.id}/")
+
+        self.assertEqual(response.status_code, 401)
+
+    def test_list_user_admin_token_200(self):
+        critic_1 = User.objects.create_user(**self.critic_1_data)
+
+        admin_user = User.objects.create(**self.admin_data)
+
+        admin_user_token = Token.objects.create(user=admin_user)
+
+        self.client.credentials(HTTP_AUTHORIZATION="token " + admin_user_token.key)
+
+        response = self.client.get(f"/api/users/{critic_1.id}/")
+
+        self.assertEqual(response.status_code, 200)
+
+    def test_list_users_admin_200(self):
+        admin_user = User.objects.create(**self.admin_data)
+
+        admin_user_token = Token.objects.create(user=admin_user)
+
+        self.client.credentials(HTTP_AUTHORIZATION="token " + admin_user_token.key)
+
+        response = self.client.get(f"/api/users/")
+
+        self.assertEqual(response.status_code, 200)
+
+    def test_list_users_admin_pagination_200(self):
+        admin_user = User.objects.create(**self.admin_data)
+
+        admin_user_token = Token.objects.create(user=admin_user)
+
+        self.client.credentials(HTTP_AUTHORIZATION="token " + admin_user_token.key)
+
+        response = self.client.get(f"/api/users/")
+
+        self.assertEqual(response.status_code, 200)
+
+        self.assertIn("results", response.data)
+
+    def test_list_users_regular_user_403(self):
+        user_token = Token.objects.create(user=self.user)
+
+        self.client.credentials(HTTP_AUTHORIZATION="token " + user_token.key)
+
+        response = self.client.get(f"/api/users/")
+
+        self.assertEqual(response.status_code, 403)
+
+    def test_list_users_critic_403(self):
+        critic = User.objects.create(**self.critic_1_data)
+
+        critic_token = Token.objects.create(user=critic)
+
+        self.client.credentials(HTTP_AUTHORIZATION="token " + critic_token.key)
+
+        response = self.client.get(f"/api/users/")
+
+        self.assertEqual(response.status_code, 403)
 
     ##### Movies #####
 
@@ -366,6 +449,9 @@ class Test_view(APITestCase):
         response = self.client.post("/api/movies/", self.movie_data_1, format="json")
 
         self.assertEqual(response.status_code, 401)
+        self.assertEqual(
+            response.data["detail"], "Authentication credentials were not provided."
+        )
 
     def test_list_movies_200(self):
 
@@ -431,6 +517,10 @@ class Test_view(APITestCase):
         response = self.client.delete(f"/api/movies/{movie.id}/")
 
         self.assertEqual(response.status_code, 403)
+        self.assertEqual(
+            response.data["detail"],
+            "You do not have permission to perform this action.",
+        )
 
     def test_delete_movie_critic_403(self):
         genre = Genre.objects.create(**{"name": "anime"})
@@ -448,6 +538,25 @@ class Test_view(APITestCase):
         response = self.client.delete(f"/api/movies/{movie.id}/")
 
         self.assertEqual(response.status_code, 403)
+        self.assertEqual(
+            response.data["detail"],
+            "You do not have permission to perform this action.",
+        )
+
+    def test_delete_movie_null_token_401(self):
+        genre = Genre.objects.create(**{"name": "anime"})
+
+        movie = Movie.objects.create(**self.movie_data_no_genre_1)
+
+        movie.genres.add(genre)
+
+        response = self.client.delete(f"/api/movies/{movie.id}/")
+
+        self.assertEqual(response.status_code, 401)
+        self.assertEqual(
+            response.data["detail"],
+            "Authentication credentials were not provided.",
+        )
 
     def test_update_movie_superuser_200(self):
         genre = Genre.objects.create(**{"name": "anime"})
@@ -587,7 +696,33 @@ class Test_view(APITestCase):
         )
 
         self.assertEqual(response.status_code, 400)
-        self.assertIn("stars", response.data)
+        self.assertIn(
+            "Ensure this value is less than or equal to 10.", response.data["stars"]
+        )
+
+    def test_create_review_invalid_recomendation_400(self):
+        genre = Genre.objects.create(**{"name": "anime"})
+
+        movie = Movie.objects.create(**self.movie_data_no_genre_1)
+
+        movie.genres.add(genre)
+
+        critic = User.objects.create(**self.critic_1_data)
+
+        critic_token = Token.objects.create(user=critic)
+
+        self.client.credentials(HTTP_AUTHORIZATION="token " + critic_token.key)
+
+        response = self.client.post(
+            f"/api/movies/{movie.id}/reviews/",
+            self.review_wrong_recomendation,
+            format="json",
+        )
+
+        self.assertEqual(response.status_code, 400)
+        self.assertIn(
+            '"Comment random" is not a valid choice.', response.data["recomendation"]
+        )
 
     def test_list_specific_review_critic_owner_200(self):
         genre = Genre.objects.create(**{"name": "anime"})
