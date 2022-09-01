@@ -100,7 +100,7 @@ class TestUserModelSerializer(TestCase):
 
 class TestUserMovieReviewViews(APITestCase):
     @classmethod
-    def setUp(cls):
+    def setUpTestData(cls):
 
         cls.critic_1_data = {
             "email": "chrys@s.com",
